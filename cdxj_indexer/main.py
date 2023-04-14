@@ -56,23 +56,23 @@ class CDXJIndexer(Indexer):
     DEFAULT_NUM_LINES = 300
 
     def __init__(
-        self,
-        output,
-        inputs,
-        post_append=False,
-        sort=False,
-        compress=None,
-        lines=DEFAULT_NUM_LINES,
-        max_sort_buff_size=None,
-        data_out_name=None,
-        filename=None,
-        fields=None,
-        replace_fields=None,
-        records=None,
-        verify_http=False,
-        dir_root=None,
-        digest_records=False,
-        **kwargs
+            self,
+            output,
+            inputs,
+            post_append=False,
+            sort=False,
+            compress=None,
+            lines=DEFAULT_NUM_LINES,
+            max_sort_buff_size=None,
+            data_out_name=None,
+            filename=None,
+            fields=None,
+            replace_fields=None,
+            records=None,
+            verify_http=False,
+            dir_root=None,
+            digest_records=False,
+            **kwargs
     ):
 
         if isinstance(inputs, str) or hasattr(inputs, "read"):
@@ -217,6 +217,11 @@ class CDXJIndexer(Indexer):
                 fh.flush()
                 if data_out:
                     data_out.close()
+                    file_name = data_out.name.split(".cdx", 1)[0].strip()
+                    loc_file = open(file_name + ".loc", "wt")
+                    loc_file.write("zipnum	x-bad-path-to-ignore-x	{}.cdxj.gz".format(file_name))
+                    loc_file.flush()
+                    loc_file.close()
 
     def _resolve_rel_path(self, filename):
         if not self.dir_root:
@@ -254,10 +259,10 @@ class CDXJIndexer(Indexer):
             return False
 
         if (
-            self.include_records == self.DEFAULT_RECORDS
-            and record.rec_type in ("resource", "metadata")
-            and record.rec_headers.get_header("Content-Type")
-            == "application/warc-fields"
+                self.include_records == self.DEFAULT_RECORDS
+                and record.rec_type in ("resource", "metadata")
+                and record.rec_headers.get_header("Content-Type")
+                == "application/warc-fields"
         ):
             return False
 
@@ -422,12 +427,12 @@ class SortingWriter:
 # ============================================================================
 class CompressedWriter:
     def __init__(
-        self,
-        index_out,
-        data_out,
-        num_lines=CDXJIndexer.DEFAULT_NUM_LINES,
-        data_out_name="",
-        digest_records=False,
+            self,
+            index_out,
+            data_out,
+            num_lines=CDXJIndexer.DEFAULT_NUM_LINES,
+            data_out_name="",
+            digest_records=False,
     ):
         self.index_out = index_out
         self.data_out = data_out
@@ -436,8 +441,14 @@ class CompressedWriter:
 
         self.block = []
         self.offset = 0
+        self.length = 0
         self.prefix = ""
         self.num_lines = num_lines
+        self.prev_line_json = None
+        self.prev_offset = 0
+        self.line_json = None
+        self.summary_out = open(data_out_name.split(".cdx", 1)[0].strip() + ".idx", "wt")
+        self.summary_line_count = 0
 
     def write_header(self):
         meta = json.dumps({"format": "cdxj-gzip-1.0", "filename": self.data_out_name})
@@ -445,6 +456,10 @@ class CompressedWriter:
         self.index_out.write("!meta 0 {0}\n".format(meta))
 
     def write(self, line):
+        self.line_json = json.loads(line[line.find('{'):])
+        if self.block:
+            prevLine = self.block[-1]
+            self.prev_line_json = json.loads(prevLine[prevLine.find('{'):])
         if not len(self.block):
             self.prefix = line.split("{", 1)[0].strip()
             if not self.offset:
@@ -452,8 +467,11 @@ class CompressedWriter:
 
         self.block.append(line)
 
-        if len(self.block) == self.num_lines:
+        if self.prev_line_json and self.prev_line_json['url'] != self.line_json['url']:
             self.flush()
+            self.summary_line_count += 1
+            self.summary_out.write("{}\tzipnum\t{}\t{}\t{}\n".format(self.prefix, self.prev_offset, self.length, self.summary_line_count ))
+            self.summary_out.flush()
 
     def get_index_json(self, length, digest):
         data = {"offset": self.offset, "length": length}
@@ -476,6 +494,8 @@ class CompressedWriter:
         line = self.prefix + " " + self.get_index_json(length, digest)
         self.index_out.write(line)
         self.data_out.write(compressed)
+        self.length = length
+        self.prev_offset = self.offset
         self.offset += length
         self.block = []
 
